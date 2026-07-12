@@ -1,0 +1,14 @@
+{
+  "name": "paycourse",
+  "version": "1.0.0",
+  "description": "PWA de gestion des paiements de cours",
+  "scripts": {
+    "config": "node generate-config.js",
+    "prestart": "node generate-config.js",
+    "start": "npx serve .",
+    "build": "node generate-config.js"
+  },
+  "keywords": ["pwa", "supabase", "calendar"],
+  "author": "",
+  "license": "MIT"
+}

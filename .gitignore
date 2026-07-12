@@ -1,0 +1,22 @@
+# ===== SÉCURITÉ - FICHIERS SENSIBLES =====
+# Ne JAMAIS committer les credentials
+.env
+supabase-config.js
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (si utilisé pour le script)
+node_modules/
+npm-debug.log*
+
+# Logs
+*.log

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PayCourse</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles.css">
+    <meta name="theme-color" content="#4a90e2">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+</head>
+<body>
+    <div id="app">
+        <!-- En-tête -->
+        <header>
+            <h1>PayCourse</h1>
+            <button id="settingsBtn" class="icon-btn">⚙️</button>
+        </header>
+
+        <!-- Calendrier -->
+        <div id="calendarContainer">
+            <div id="monthNav">
+                <button id="prevMonth">←</button>
+                <h2 id="currentMonth"></h2>
+                <button id="nextMonth">→</button>
+            </div>
+            <div id="weekdays">
+                <div>Lun</div>
+                <div>Mar</div>
+                <div>Mer</div>
+                <div>Jeu</div>
+                <div>Ven</div>
+                <div>Sam</div>
+                <div>Dim</div>
+            </div>
+            <div id="calendarGrid"></div>
+        </div>
+
+        <!-- Zone de détail -->
+        <div id="detailPanel">
+            <div id="detailContent">
+                <p class="placeholder">Sélectionnez un jour</p>
+            </div>
+        </div>
+
+        <!-- Modal Paramètres -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content">
+                <h3>Paramètres</h3>
+                <label>Prix du cours (€)</label>
+                <input type="number" id="coursePrice" value="15">
+                
+                <label>Nom de l'élève</label>
+                <input type="text" id="studentName">
+                
+                <label>Nom du professeur</label>
+                <input type="text" id="teacherName">
+                
+                <label>Mode utilisateur</label>
+                <select id="userMode">
+                    <option value="student">Élève</option>
+                    <option value="teacher">Professeur</option>
+                </select>
+                
+                <div class="button-group">
+                    <button id="saveSettings" class="btn-primary">Enregistrer</button>
+                    <button id="closeSettings" class="btn-secondary">Fermer</button>
+                </div>
+                
+                <button id="resetData" class="btn-danger">Réinitialiser les données</button>
+            </div>
+        </div>
+    </div>
+
+	<!-- Supabase SDK -->
+	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+	<script src="supabase-config.js"></script>
+	<script src="app.js"></script>
+</body>
+</html>

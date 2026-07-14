@@ -1,4 +1,4 @@
-const CACHE_NAME = 'paycourse-v4';
+const CACHE_NAME = 'paycourse-v5';
 const urlsToCache = [
     '/',
     '/index.html',

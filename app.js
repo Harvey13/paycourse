@@ -257,6 +257,67 @@ function getAllocation(dateStr, paidAmount) {
     };
 }
 
+function getCourseLedger(dataSource = courseData) {
+    const sortedKeys = Object.keys(dataSource)
+        .filter(key => isCourseEntry(dataSource[key]))
+        .sort();
+    const ledger = {};
+    const openDebts = [];
+    let credit = 0;
+
+    sortedKeys.forEach(key => {
+        const record = dataSource[key] || {};
+        const rawPayment = Math.max(0, Number(record.paymentAmount ?? record.paidAmount ?? 0) || 0);
+        const creditUsed = Math.min(credit, settings.coursePrice);
+        credit = Math.max(0, credit - settings.coursePrice);
+        const courseDue = Math.max(0, settings.coursePrice - creditUsed);
+        let remainingPayment = rawPayment;
+        let paidForPreviousCourses = 0;
+
+        openDebts.forEach(debt => {
+            if (remainingPayment <= 0 || debt.remaining <= 0) return;
+            const paid = Math.min(remainingPayment, debt.remaining);
+            debt.remaining -= paid;
+            remainingPayment -= paid;
+            paidForPreviousCourses += paid;
+        });
+
+        const currentPayment = Math.min(remainingPayment, courseDue);
+        remainingPayment -= currentPayment;
+
+        ledger[key] = {
+            due: courseDue,
+            rawPayment,
+            creditUsed,
+            currentPayment,
+            paidForPreviousCourses,
+            remaining: Math.max(0, courseDue - currentPayment),
+            paidLaterAmount: 0,
+            paidByLater: false,
+            creditCreated: 0
+        };
+
+        if (ledger[key].remaining > 0) {
+            openDebts.push({
+                key,
+                get remaining() {
+                    return ledger[key].remaining;
+                },
+                set remaining(value) {
+                    ledger[key].paidLaterAmount += Math.max(0, ledger[key].remaining - value);
+                    ledger[key].paidByLater = value < ledger[key].remaining;
+                    ledger[key].remaining = Math.max(0, value);
+                }
+            });
+        }
+
+        credit += remainingPayment;
+        ledger[key].creditCreated = remainingPayment;
+    });
+
+    return ledger;
+}
+
 function formatEuro(amount) {
     return `${Number(amount || 0).toFixed(2)} €`;
 }
@@ -273,6 +334,10 @@ function buildPaymentExplanation(summary) {
     const currentDue = Number(summary.montantCoursPaye || 0) + Number(summary.resteAPayer || 0);
     const totalDue = previousDebt + currentDue;
     const parts = [];
+
+    if (summary.payePlusTard > 0) {
+        return `${formatEuro(summary.montantSaisi)} versés ce jour-là. Le reste du cours, soit ${formatEuro(summary.payePlusTard)}, a été réglé par un paiement ultérieur. Ce cours est donc soldé.`;
+    }
 
     if (isSameAmount(paid, price) && previousDebt === 0 && previousCredit === 0 && summary.excedent === 0 && summary.resteAPayer === 0) {
         return `Somme exacte: ${formatEuro(paid)} versés pour ${formatEuro(price)} dus.`;
@@ -328,31 +393,41 @@ function buildPaymentSummaryHtml(summary) {
 
     return `
         <strong>État :</strong> ${summary.etat}<br>
-        <strong>Montant saisi :</strong> ${formatEuro(summary.montantSaisi)}${summary.excedent > 0 ? `<br><strong>Excédent :</strong> ${formatEuro(summary.excedent)}` : ''}${debtExplanation}${remainingExplanation}<br>
+        <strong>Montant saisi :</strong> ${formatEuro(summary.montantSaisi)}${summary.payePlusTard > 0 ? `<br><strong>Payé plus tard :</strong> ${formatEuro(summary.payePlusTard)}` : ''}${summary.excedent > 0 ? `<br><strong>Excédent :</strong> ${formatEuro(summary.excedent)}` : ''}${debtExplanation}${remainingExplanation}<br>
         <strong>Explication :</strong> ${summary.explication}
     `;
 }
 
 function getCourseSummaryPreview(dateStr, paidAmount) {
     const existing = courseData[dateStr] || {};
-    return getCourseExportSummary(dateStr, {
-        ...(existing || {}),
-        exists: isCourseEntry(existing) || paidAmount > 0,
-        paymentAmount: paidAmount
-    });
+    const previewData = {
+        ...courseData,
+        [dateStr]: {
+            ...(existing || {}),
+            exists: isCourseEntry(existing) || paidAmount > 0,
+            paymentAmount: paidAmount
+        }
+    };
+    const previewLedger = getCourseLedger(previewData);
+
+    return getCourseExportSummary(dateStr, previewData[dateStr], previewLedger[dateStr]);
 }
 
-function getCourseExportSummary(dateStr, data) {
+function getCourseExportSummary(dateStr, data, ledgerStatus = null) {
     const paidAmount = Math.max(0, Number(data.paymentAmount ?? data.paidAmount ?? 0) || 0);
     const allocation = getAllocation(dateStr, paidAmount);
     const currentDue = Math.max(0, settings.coursePrice - Math.max(0, allocation.priorBalance));
     const totalDue = currentDue + allocation.previousDebt;
+    const paidLaterAmount = Math.max(0, Number(ledgerStatus?.paidLaterAmount || 0));
 
     let status = 'Non payé';
     let excess = 0;
     let remainingToPay = Math.max(0, totalDue - paidAmount);
 
-    if (paidAmount > 0) {
+    if (paidLaterAmount > 0 && Number(ledgerStatus?.remaining || 0) <= 0.005) {
+        status = 'Payé par paiement ultérieur';
+        remainingToPay = 0;
+    } else if (paidAmount > 0) {
         if (paidAmount > totalDue && !isSameAmount(paidAmount, totalDue)) {
             status = 'Payé intégralement + excédent';
             excess = paidAmount - totalDue;
@@ -371,6 +446,7 @@ function getCourseExportSummary(dateStr, data) {
         montantSaisi: paidAmount,
         excedent: excess,
         resteAPayer: remainingToPay,
+        payePlusTard: paidLaterAmount,
         valide: Boolean(data.validated),
         prixCours: Number(settings.coursePrice || 0),
         dettePrecedente: allocation.previousDebt,
@@ -394,6 +470,7 @@ function exportCourseAnalysis() {
     const courseKeys = allKeys
         .filter(key => isCourseEntry(courseData[key]))
         .sort();
+    const ledger = getCourseLedger();
 
     console.group('[PayCourse export] Export analyse cours');
     console.info('[PayCourse export] Démarrage', {
@@ -414,7 +491,7 @@ function exportCourseAnalysis() {
     }
 
     const rows = courseKeys.map(key => {
-            const summary = getCourseExportSummary(key, courseData[key] || {});
+            const summary = getCourseExportSummary(key, courseData[key] || {}, ledger[key]);
             console.debug('[PayCourse export] Ligne préparée', { key, summary, raw: courseData[key] });
             return [
                 summary.date,
@@ -423,6 +500,7 @@ function exportCourseAnalysis() {
                 summary.montantSaisi.toFixed(2),
                 summary.excedent.toFixed(2),
                 summary.resteAPayer.toFixed(2),
+                summary.payePlusTard.toFixed(2),
                 summary.dettePrecedente.toFixed(2),
                 summary.montantDettePayee.toFixed(2),
                 summary.montantCoursPaye.toFixed(2),
@@ -451,6 +529,7 @@ function exportCourseAnalysis() {
         'Montant saisi (€)',
         'Excédent (€)',
         'Reste à payer (€)',
+        'Payé plus tard (€)',
         'Dette précédente (€)',
         'Dette payée (€)',
         'Cours payé (€)',
@@ -702,6 +781,7 @@ function renderCalendar() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const ledger = getCourseLedger();
 
     for (let day = 1; day <= lastDay.getDate(); day++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -714,8 +794,9 @@ function renderCalendar() {
         const isFuture = dateObj > today;
         const hasCourse = isCourseEntry(data);
         const paidAmount = Number(data.paidAmount || data.paymentAmount || 0);
-        const isPrepaidFuture = isFuture && hasCourse && paidAmount > 0;
-        const isFutureUnpaid = isFuture && hasCourse && paidAmount === 0;
+        const ledgerStatus = ledger[dateStr] || null;
+        const remainingAfterAllPayments = ledgerStatus ? ledgerStatus.remaining : Math.max(0, settings.coursePrice - paidAmount);
+        const isSettled = hasCourse && remainingAfterAllPayments <= 0.005;
 
         cell.className = 'day-cell';
         if (dateStr === selectedDate) {
@@ -732,18 +813,25 @@ function renderCalendar() {
 
             if (data.hasCredit && Number(data.paidAmount || 0) === 0) {
                 cell.classList.add('credit');
-            } else if (isFuture && paidAmount >= settings.coursePrice) {
+            } else if (isFuture && isSettled) {
                 cell.classList.add('future-paid');
             } else if (isFuture && paidAmount > 0) {
                 cell.classList.add('future-paid');
             } else if (isFuture && paidAmount === 0) {
                 cell.classList.add('future-unpaid');
-            } else if (paidAmount >= settings.coursePrice) {
+            } else if (isSettled) {
                 cell.classList.add('paid');
             } else if (paidAmount > 0) {
                 cell.classList.add('partial');
             } else {
                 cell.classList.add('unpaid');
+            }
+
+            if (ledgerStatus?.paidByLater) {
+                const label = document.createElement('span');
+                label.className = 'small-label';
+                label.textContent = 'soldé';
+                cell.appendChild(label);
             }
         } else {
             if (isFuture) {
@@ -785,7 +873,8 @@ function renderDetail(dateStr) {
         month: 'long'
     });
     const paidAmount = Number(data.paymentAmount || data.paidAmount || 0);
-    const summary = getCourseExportSummary(dateStr, data);
+    const ledger = getCourseLedger();
+    const summary = getCourseExportSummary(dateStr, data, ledger[dateStr]);
 
     let html = `
         <div class="detail-row">

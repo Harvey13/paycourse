@@ -315,6 +315,33 @@ function buildPaymentExplanation(summary) {
     return parts.join(' ');
 }
 
+function buildPaymentSummaryHtml(summary) {
+    const debtExplanation = summary.dettePrecedente > 0
+        ? `<br><strong>Reste à payer :</strong> ${formatEuro(summary.resteAPayer)} (${formatEuro(summary.prixCours)} + ${formatEuro(summary.dettePrecedente)} de dette précédente)`
+        : summary.soldeAvantCours > 0
+            ? `<br><strong>Crédit utilisé :</strong> ${formatEuro(Math.min(summary.soldeAvantCours, summary.prixCours))}`
+            : '';
+
+    const remainingExplanation = summary.resteAPayer > 0 && summary.dettePrecedente === 0
+        ? `<br><strong>Reste à payer :</strong> ${formatEuro(summary.resteAPayer)}`
+        : '';
+
+    return `
+        <strong>État :</strong> ${summary.etat}<br>
+        <strong>Montant saisi :</strong> ${formatEuro(summary.montantSaisi)}${summary.excedent > 0 ? `<br><strong>Excédent :</strong> ${formatEuro(summary.excedent)}` : ''}${debtExplanation}${remainingExplanation}<br>
+        <strong>Explication :</strong> ${summary.explication}
+    `;
+}
+
+function getCourseSummaryPreview(dateStr, paidAmount) {
+    const existing = courseData[dateStr] || {};
+    return getCourseExportSummary(dateStr, {
+        ...(existing || {}),
+        exists: isCourseEntry(existing) || paidAmount > 0,
+        paymentAmount: paidAmount
+    });
+}
+
 function getCourseExportSummary(dateStr, data) {
     const paidAmount = Math.max(0, Number(data.paymentAmount ?? data.paidAmount ?? 0) || 0);
     const allocation = getAllocation(dateStr, paidAmount);
@@ -466,6 +493,10 @@ function exportCourseAnalysis() {
 // Sauvegarder le paiement
 async function savePayment(dateStr) {
     const paidAmount = parseFloat(document.getElementById('paidAmount').value) || 0;
+    console.info('[PayCourse paiement] Validation du paiement', {
+        date: dateStr,
+        montantSaisi: paidAmount
+    });
     const existing = courseData[dateStr] || {};
     courseData[dateStr] = {
         ...(existing || {}),
@@ -755,10 +786,6 @@ function renderDetail(dateStr) {
     });
     const paidAmount = Number(data.paymentAmount || data.paidAmount || 0);
     const summary = getCourseExportSummary(dateStr, data);
-    const allocation = getAllocation(dateStr, paidAmount);
-    const paymentStatus = summary.etat;
-    const paymentExtra = summary.excedent;
-    const debtToPay = summary.resteAPayer;
 
     let html = `
         <div class="detail-row">
@@ -784,17 +811,9 @@ function renderDetail(dateStr) {
         return;
     }
 
-    const debtExplanation = allocation.previousDebt > 0
-        ? `<br><strong>Reste à payer :</strong> ${debtToPay.toFixed(2)} € (${settings.coursePrice.toFixed(2)} € + ${allocation.previousDebt.toFixed(2)} € de dette précédente)`
-        : allocation.priorBalance > 0 && debtToPay > 0
-            ? `<br><strong>Reste à payer :</strong> ${debtToPay.toFixed(2)} € (${settings.coursePrice.toFixed(2)} € - ${Math.abs(allocation.priorBalance).toFixed(2)} € d'excédent)`
-            : `${debtToPay > 0 ? `<br><strong>Reste à payer :</strong> ${debtToPay.toFixed(2)} €` : ''}`;
-
     html += `
-        <div class="detail-summary">
-            <strong>État :</strong> ${paymentStatus}<br>
-            <strong>Montant saisi :</strong> ${paidAmount.toFixed(2)} €${paymentExtra > 0 ? `<br><strong>Excédent :</strong> ${paymentExtra.toFixed(2)} €` : ''}${debtExplanation}<br>
-            <strong>Explication :</strong> ${summary.explication}
+        <div class="detail-summary" id="paymentSummary">
+            ${buildPaymentSummaryHtml(summary)}
         </div>
     `;
 
@@ -810,12 +829,12 @@ function renderDetail(dateStr) {
             </div>
         `;
     } else {
-        const allocation = getAllocation(dateStr, paidAmount);
         html += `
             <div class="detail-row">
                 <label>Montant versé :</label>
                 <input type="number" id="paidAmount" value="${Number(data.paymentAmount || data.paidAmount || 0).toFixed(2)}" min="0" step="0.01" placeholder="Ex. 15">
             </div>
+            <div class="breakdown" id="breakdown"></div>
             <div class="amount-presets">
                 <button type="button" class="preset-btn" data-value="10">10 €</button>
                 <button type="button" class="preset-btn" data-value="15">15 €</button>
@@ -868,19 +887,21 @@ function updateBreakdown() {
     const amountInput = document.getElementById('paidAmount');
     const paidAmount = parseFloat(amountInput?.value) || 0;
     const breakdown = document.getElementById('breakdown');
-    if (!breakdown) return;
 
     if (selectedDate) {
-        const existing = courseData[selectedDate] || {};
-        courseData[selectedDate] = {
-            ...(existing || {}),
-            exists: true,
-            paymentAmount: paidAmount,
-            timestamp: new Date().toISOString()
-        };
-        recomputeCourseData();
-        renderCalendar();
+        const summary = getCourseSummaryPreview(selectedDate, paidAmount);
+        const paymentSummary = document.getElementById('paymentSummary');
+        if (paymentSummary) {
+            paymentSummary.innerHTML = buildPaymentSummaryHtml(summary);
+        }
+        console.debug('[PayCourse paiement] Aperçu non enregistré', {
+            date: selectedDate,
+            montantSaisi: paidAmount,
+            explication: summary.explication
+        });
     }
+
+    if (!breakdown) return;
 
     const allocation = getAllocation(selectedDate, paidAmount);
 
@@ -906,8 +927,16 @@ function updateBreakdown() {
 
 // Service Worker
 if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').then(() => {
+    let serviceWorkerRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (serviceWorkerRefreshing) return;
+        serviceWorkerRefreshing = true;
+        window.location.reload();
+    });
+
+    navigator.serviceWorker.register('sw.js').then(registration => {
         console.log('Service Worker enregistré');
+        registration.update();
     }).catch(err => {
         console.error('Erreur Service Worker:', err);
     });

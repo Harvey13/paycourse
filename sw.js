@@ -1,4 +1,4 @@
-const CACHE_NAME = 'paycourse-v2';
+const CACHE_NAME = 'paycourse-v4';
 const urlsToCache = [
     '/',
     '/index.html',
@@ -14,6 +14,7 @@ self.addEventListener('install', event => {
         caches.open(CACHE_NAME)
             .then(cache => cache.addAll(urlsToCache))
     );
+    self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
@@ -26,7 +27,7 @@ self.addEventListener('activate', event => {
                     }
                 })
             );
-        })
+        }).then(() => self.clients.claim())
     );
 });
 

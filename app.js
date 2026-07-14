@@ -290,6 +290,11 @@ function getCourseExportSummary(dateStr, data) {
 }
 
 function exportCourseAnalysis() {
+    console.log('[export] démarrage', {
+        courseCount: Object.keys(courseData).length,
+        price: settings.coursePrice
+    });
+
     const rows = Object.keys(courseData)
         .filter(key => isCourseEntry(courseData[key]))
         .sort()
@@ -305,20 +310,28 @@ function exportCourseAnalysis() {
             ];
         });
 
+    console.log('[export] lignes générées', rows.length);
+
     const headers = ['Date', 'État', 'Montant saisi (€)', 'Excédent (€)', 'Reste à payer (€)', 'Validé'];
     const csvContent = [headers, ...rows]
         .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
         .join('\n');
 
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'analyse-cours.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    try {
+        const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'analyse-cours.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        console.log('[export] fichier téléchargé');
+    } catch (error) {
+        console.error('[export] erreur', error);
+        alert('Échec de l’export. Vérifiez la console DevTools.');
+    }
 }
 
 // Sauvegarder le paiement
@@ -467,7 +480,10 @@ function setupEventListeners() {
     });
 
     saveSettingsButton?.addEventListener('click', saveSettings);
-    exportButton?.addEventListener('click', exportCourseAnalysis);
+    exportButton?.addEventListener('click', (event) => {
+        console.log('[export] bouton cliqué', event);
+        exportCourseAnalysis();
+    });
     resetButton?.addEventListener('click', resetData);
 }
 
@@ -765,77 +781,6 @@ function updateBreakdown() {
 // Service Worker
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').then(() => {
-        console.log('Service Worker enregistré');
-    }).catch(err => {
-        console.error('Erreur Service Worker:', err);
-    });
-}
-// Navigation mois
-function setupEventListeners() {
-    document.getElementById('prevMonth').addEventListener('click', () => {
-        currentDate.setMonth(currentDate.getMonth() - 1);
-        renderCalendar();
-    });
-    
-    document.getElementById('nextMonth').addEventListener('click', () => {
-        currentDate.setMonth(currentDate.getMonth() + 1);
-        renderCalendar();
-    });
-    
-    document.getElementById('settingsBtn').addEventListener('click', () => {
-        document.getElementById('settingsModal').classList.add('active');
-    });
-    
-    document.getElementById('closeSettings').addEventListener('click', () => {
-        document.getElementById('settingsModal').classList.remove('active');
-    });
-    
-    document.getElementById('saveSettings').addEventListener('click', saveSettings);
-    
-    document.getElementById('resetData').addEventListener('click', resetData);
-}
-
-// Sauvegarder les paramètres
-function saveSettings() {
-    settings.coursePrice = parseFloat(document.getElementById('coursePrice').value) || 15;
-    settings.studentName = document.getElementById('studentName').value;
-    settings.teacherName = document.getElementById('teacherName').value;
-    settings.userMode = document.getElementById('userMode').value;
-    
-    localStorage.setItem('paycourse_settings', JSON.stringify(settings));
-    document.getElementById('settingsModal').classList.remove('active');
-    
-    renderCalendar();
-    if (selectedDate) {
-        renderDetail(selectedDate);
-    }
-    
-    alert('Paramètres enregistrés !');
-}
-
-// Réinitialiser les données
-function resetData() {
-    if (confirm('Êtes-vous sûr de vouloir réinitialiser toutes les données ?')) {
-        courseData = {};
-        localStorage.removeItem('paycourse_data');
-        
-        if (window.db) {
-            window.db.collection('courses').get().then(snapshot => {
-                snapshot.forEach(doc => {
-                    window.db.collection('courses').doc(doc.id).delete();
-                });
-            });
-        }
-        
-        renderCalendar();
-        document.getElementById('detailContent').innerHTML = '<p class="placeholder">Sélectionnez un jour</p>';
-        document.getElementById('settingsModal').classList.remove('active');
-    }
-}
-
-// Service Worker
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').then(reg => {
         console.log('Service Worker enregistré');
     }).catch(err => {
         console.error('Erreur Service Worker:', err);

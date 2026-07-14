@@ -257,6 +257,70 @@ function getAllocation(dateStr, paidAmount) {
     };
 }
 
+function getCourseExportSummary(dateStr, data) {
+    const paidAmount = Number(data.paymentAmount ?? data.paidAmount ?? 0);
+    const allocation = getAllocation(dateStr, paidAmount);
+    const currentDue = Math.max(0, settings.coursePrice - Math.max(0, allocation.priorBalance));
+    const totalDue = currentDue + allocation.previousDebt;
+
+    let status = 'Non payé';
+    let excess = 0;
+    let remainingToPay = Math.max(0, totalDue - paidAmount);
+
+    if (paidAmount > 0) {
+        if (paidAmount > totalDue) {
+            status = 'Payé intégralement + excédent';
+            excess = paidAmount - totalDue;
+            remainingToPay = 0;
+        } else if (paidAmount === totalDue) {
+            status = 'Payé intégralement';
+        } else {
+            status = 'Partiellement payé';
+        }
+    }
+
+    return {
+        date: dateStr,
+        etat: status,
+        montantSaisi: paidAmount,
+        excedent: excess,
+        resteAPayer: remainingToPay,
+        valide: Boolean(data.validated)
+    };
+}
+
+function exportCourseAnalysis() {
+    const rows = Object.keys(courseData)
+        .filter(key => isCourseEntry(courseData[key]))
+        .sort()
+        .map(key => {
+            const summary = getCourseExportSummary(key, courseData[key] || {});
+            return [
+                summary.date,
+                summary.etat,
+                summary.montantSaisi.toFixed(2),
+                summary.excedent.toFixed(2),
+                summary.resteAPayer.toFixed(2),
+                summary.valide ? 'Oui' : 'Non'
+            ];
+        });
+
+    const headers = ['Date', 'État', 'Montant saisi (€)', 'Excédent (€)', 'Reste à payer (€)', 'Validé'];
+    const csvContent = [headers, ...rows]
+        .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'analyse-cours.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
 // Sauvegarder le paiement
 async function savePayment(dateStr) {
     const paidAmount = parseFloat(document.getElementById('paidAmount').value) || 0;
@@ -381,6 +445,7 @@ function setupEventListeners() {
     const settingsButton = document.getElementById('settingsBtn');
     const closeSettingsButton = document.getElementById('closeSettings');
     const saveSettingsButton = document.getElementById('saveSettings');
+    const exportButton = document.getElementById('exportCourseData');
     const resetButton = document.getElementById('resetData');
 
     prevMonthButton?.addEventListener('click', () => {
@@ -402,6 +467,7 @@ function setupEventListeners() {
     });
 
     saveSettingsButton?.addEventListener('click', saveSettings);
+    exportButton?.addEventListener('click', exportCourseAnalysis);
     resetButton?.addEventListener('click', resetData);
 }
 

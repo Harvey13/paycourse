@@ -258,7 +258,7 @@ function getAllocation(dateStr, paidAmount) {
 }
 
 function getCourseExportSummary(dateStr, data) {
-    const paidAmount = Number(data.paymentAmount ?? data.paidAmount ?? 0);
+    const paidAmount = Math.max(0, Number(data.paymentAmount ?? data.paidAmount ?? 0) || 0);
     const allocation = getAllocation(dateStr, paidAmount);
     const currentDue = Math.max(0, settings.coursePrice - Math.max(0, allocation.priorBalance));
     const totalDue = currentDue + allocation.previousDebt;
@@ -285,34 +285,89 @@ function getCourseExportSummary(dateStr, data) {
         montantSaisi: paidAmount,
         excedent: excess,
         resteAPayer: remainingToPay,
-        valide: Boolean(data.validated)
+        valide: Boolean(data.validated),
+        prixCours: Number(settings.coursePrice || 0),
+        dettePrecedente: allocation.previousDebt,
+        montantDettePayee: allocation.debtPayment,
+        montantCoursPaye: allocation.currentPayment,
+        avoirFutur: allocation.credit,
+        soldeAvantCours: allocation.priorBalance,
+        cree: Boolean(data.exists || data.courseExists || data.createdAt || data.created),
+        derniereMaj: data.timestamp || data.updated_at || data.createdAt || data.created || ''
     };
 }
 
 function exportCourseAnalysis() {
-    console.log('[export] démarrage', {
-        courseCount: Object.keys(courseData).length,
-        price: settings.coursePrice
+    const startedAt = new Date();
+    const allKeys = Object.keys(courseData || {});
+    const courseKeys = allKeys
+        .filter(key => isCourseEntry(courseData[key]))
+        .sort();
+
+    console.group('[PayCourse export] Export analyse cours');
+    console.info('[PayCourse export] Démarrage', {
+        at: startedAt.toISOString(),
+        totalStoredKeys: allKeys.length,
+        detectedCourses: courseKeys.length,
+        coursePrice: settings.coursePrice,
+        userMode: settings.userMode,
+        storageBytes: localStorage.getItem('paycourse_data')?.length || 0,
+        supabaseConfigured: Boolean(window.supabase && isSupabaseConfigured())
     });
 
-    const rows = Object.keys(courseData)
-        .filter(key => isCourseEntry(courseData[key]))
-        .sort()
-        .map(key => {
+    if (allKeys.length > 0 && courseKeys.length === 0) {
+        console.warn('[PayCourse export] Des données existent, mais aucune entrée ne ressemble à un cours.', {
+            keys: allKeys,
+            sample: allKeys.slice(0, 5).map(key => ({ key, value: courseData[key] }))
+        });
+    }
+
+    const rows = courseKeys.map(key => {
             const summary = getCourseExportSummary(key, courseData[key] || {});
+            console.debug('[PayCourse export] Ligne préparée', { key, summary, raw: courseData[key] });
             return [
                 summary.date,
                 summary.etat,
+                summary.prixCours.toFixed(2),
                 summary.montantSaisi.toFixed(2),
                 summary.excedent.toFixed(2),
                 summary.resteAPayer.toFixed(2),
-                summary.valide ? 'Oui' : 'Non'
+                summary.dettePrecedente.toFixed(2),
+                summary.montantDettePayee.toFixed(2),
+                summary.montantCoursPaye.toFixed(2),
+                summary.avoirFutur.toFixed(2),
+                summary.soldeAvantCours.toFixed(2),
+                summary.valide ? 'Oui' : 'Non',
+                summary.cree ? 'Oui' : 'Non',
+                summary.derniereMaj
             ];
         });
 
-    console.log('[export] lignes générées', rows.length);
+    console.info('[PayCourse export] Lignes générées', rows.length);
 
-    const headers = ['Date', 'État', 'Montant saisi (€)', 'Excédent (€)', 'Reste à payer (€)', 'Validé'];
+    if (rows.length === 0) {
+        console.warn('[PayCourse export] Export annulé: aucun cours à exporter.');
+        console.groupEnd();
+        alert('Aucun cours à exporter pour le moment.');
+        return;
+    }
+
+    const headers = [
+        'Date',
+        'État',
+        'Prix du cours (€)',
+        'Montant saisi (€)',
+        'Excédent (€)',
+        'Reste à payer (€)',
+        'Dette précédente (€)',
+        'Dette payée (€)',
+        'Cours payé (€)',
+        'Avoir futur (€)',
+        'Solde avant cours (€)',
+        'Validé',
+        'Cours créé',
+        'Dernière mise à jour'
+    ];
     const csvContent = [headers, ...rows]
         .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
         .join('\n');
@@ -321,16 +376,24 @@ function exportCourseAnalysis() {
         const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
+        const dateForFile = startedAt.toISOString().slice(0, 10);
         link.href = url;
-        link.download = 'analyse-cours.csv';
+        link.download = `analyse-cours-${dateForFile}.csv`;
+        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        console.log('[export] fichier téléchargé');
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        console.info('[PayCourse export] Téléchargement demandé', {
+            fileName: link.download,
+            rows: rows.length,
+            bytes: csvContent.length
+        });
     } catch (error) {
-        console.error('[export] erreur', error);
+        console.error('[PayCourse export] Erreur pendant la génération du fichier', error);
         alert('Échec de l’export. Vérifiez la console DevTools.');
+    } finally {
+        console.groupEnd();
     }
 }
 
@@ -461,6 +524,13 @@ function setupEventListeners() {
     const exportButton = document.getElementById('exportCourseData');
     const resetButton = document.getElementById('resetData');
 
+    console.info('[PayCourse init] Éléments paramètres', {
+        settingsButtonFound: Boolean(settingsButton),
+        exportButtonFound: Boolean(exportButton),
+        saveSettingsButtonFound: Boolean(saveSettingsButton),
+        resetButtonFound: Boolean(resetButton)
+    });
+
     prevMonthButton?.addEventListener('click', () => {
         currentDate.setMonth(currentDate.getMonth() - 1);
         renderCalendar();
@@ -481,7 +551,11 @@ function setupEventListeners() {
 
     saveSettingsButton?.addEventListener('click', saveSettings);
     exportButton?.addEventListener('click', (event) => {
-        console.log('[export] bouton cliqué', event);
+        event.preventDefault();
+        console.info('[PayCourse export] Bouton cliqué', {
+            targetId: event.currentTarget?.id,
+            courseCount: Object.keys(courseData || {}).filter(key => isCourseEntry(courseData[key])).length
+        });
         exportCourseAnalysis();
     });
     resetButton?.addEventListener('click', resetData);

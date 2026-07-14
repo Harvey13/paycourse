@@ -257,6 +257,64 @@ function getAllocation(dateStr, paidAmount) {
     };
 }
 
+function formatEuro(amount) {
+    return `${Number(amount || 0).toFixed(2)} €`;
+}
+
+function isSameAmount(left, right) {
+    return Math.abs(Number(left || 0) - Number(right || 0)) < 0.005;
+}
+
+function buildPaymentExplanation(summary) {
+    const price = Number(summary.prixCours || 0);
+    const paid = Number(summary.montantSaisi || 0);
+    const previousDebt = Number(summary.dettePrecedente || 0);
+    const previousCredit = Math.max(0, Number(summary.soldeAvantCours || 0));
+    const currentDue = Number(summary.montantCoursPaye || 0) + Number(summary.resteAPayer || 0);
+    const totalDue = previousDebt + currentDue;
+    const parts = [];
+
+    if (isSameAmount(paid, price) && previousDebt === 0 && previousCredit === 0 && summary.excedent === 0 && summary.resteAPayer === 0) {
+        return `Somme exacte: ${formatEuro(paid)} versés pour ${formatEuro(price)} dus.`;
+    }
+
+    if (previousDebt > 0) {
+        parts.push(`Dette précédente de ${formatEuro(previousDebt)} ajoutée au cours de ${formatEuro(price)}, soit ${formatEuro(totalDue)} à régler.`);
+    } else if (previousCredit > 0) {
+        const consumedCredit = Math.min(previousCredit, price);
+        parts.push(`Crédit précédent de ${formatEuro(previousCredit)} consommé à hauteur de ${formatEuro(consumedCredit)} sur le cours de ${formatEuro(price)}.`);
+        parts.push(`Il restait donc ${formatEuro(currentDue)} à régler pour ce cours.`);
+    } else {
+        parts.push(`Cours dû: ${formatEuro(price)}.`);
+    }
+
+    if (paid === 0) {
+        parts.push(`Aucun versement saisi.`);
+    } else {
+        parts.push(`${formatEuro(paid)} versés.`);
+    }
+
+    if (previousDebt > 0 && summary.montantDettePayee > 0) {
+        parts.push(`${formatEuro(summary.montantDettePayee)} affectés à la dette précédente.`);
+    }
+
+    if (summary.montantCoursPaye > 0) {
+        parts.push(`${formatEuro(summary.montantCoursPaye)} affectés au cours actuel.`);
+    }
+
+    if (summary.resteAPayer > 0) {
+        parts.push(`Reste à payer: ${formatEuro(summary.resteAPayer)}.`);
+    } else if (summary.excedent > 0) {
+        parts.push(`Tout est réglé et ${formatEuro(summary.excedent)} deviennent un crédit pour un futur cours.`);
+    } else if (isSameAmount(paid, price) && previousDebt === 0 && previousCredit === 0) {
+        parts.push(`Somme exacte, rien à payer et rien en trop.`);
+    } else {
+        parts.push(`Tout est réglé, rien à payer.`);
+    }
+
+    return parts.join(' ');
+}
+
 function getCourseExportSummary(dateStr, data) {
     const paidAmount = Math.max(0, Number(data.paymentAmount ?? data.paidAmount ?? 0) || 0);
     const allocation = getAllocation(dateStr, paidAmount);
@@ -268,18 +326,19 @@ function getCourseExportSummary(dateStr, data) {
     let remainingToPay = Math.max(0, totalDue - paidAmount);
 
     if (paidAmount > 0) {
-        if (paidAmount > totalDue) {
+        if (paidAmount > totalDue && !isSameAmount(paidAmount, totalDue)) {
             status = 'Payé intégralement + excédent';
             excess = paidAmount - totalDue;
             remainingToPay = 0;
-        } else if (paidAmount === totalDue) {
+        } else if (isSameAmount(paidAmount, totalDue)) {
             status = 'Payé intégralement';
+            remainingToPay = 0;
         } else {
             status = 'Partiellement payé';
         }
     }
 
-    return {
+    const summary = {
         date: dateStr,
         etat: status,
         montantSaisi: paidAmount,
@@ -294,6 +353,11 @@ function getCourseExportSummary(dateStr, data) {
         soldeAvantCours: allocation.priorBalance,
         cree: Boolean(data.exists || data.courseExists || data.createdAt || data.created),
         derniereMaj: data.timestamp || data.updated_at || data.createdAt || data.created || ''
+    };
+
+    return {
+        ...summary,
+        explication: buildPaymentExplanation(summary)
     };
 }
 
@@ -337,6 +401,7 @@ function exportCourseAnalysis() {
                 summary.montantCoursPaye.toFixed(2),
                 summary.avoirFutur.toFixed(2),
                 summary.soldeAvantCours.toFixed(2),
+                summary.explication,
                 summary.valide ? 'Oui' : 'Non',
                 summary.cree ? 'Oui' : 'Non',
                 summary.derniereMaj
@@ -364,6 +429,7 @@ function exportCourseAnalysis() {
         'Cours payé (€)',
         'Avoir futur (€)',
         'Solde avant cours (€)',
+        'Explication',
         'Validé',
         'Cours créé',
         'Dernière mise à jour'
@@ -688,26 +754,11 @@ function renderDetail(dateStr) {
         month: 'long'
     });
     const paidAmount = Number(data.paymentAmount || data.paidAmount || 0);
+    const summary = getCourseExportSummary(dateStr, data);
     const allocation = getAllocation(dateStr, paidAmount);
-    let paymentStatus = 'Non payé';
-    let paymentExtra = 0;
-    const currentDue = Math.max(0, settings.coursePrice - Math.max(0, allocation.priorBalance));
-    const totalDue = currentDue + allocation.previousDebt;
-    let debtToPay = Math.max(0, totalDue - paidAmount);
-
-    if (paidAmount > 0) {
-        if (paidAmount > totalDue) {
-            paymentStatus = 'Payé intégralement + excédent';
-            paymentExtra = paidAmount - totalDue;
-            debtToPay = 0;
-        } else if (paidAmount === totalDue) {
-            paymentStatus = 'Payé intégralement';
-            debtToPay = 0;
-        } else {
-            paymentStatus = 'Partiellement payé';
-            debtToPay = totalDue - paidAmount;
-        }
-    }
+    const paymentStatus = summary.etat;
+    const paymentExtra = summary.excedent;
+    const debtToPay = summary.resteAPayer;
 
     let html = `
         <div class="detail-row">
@@ -742,7 +793,8 @@ function renderDetail(dateStr) {
     html += `
         <div class="detail-summary">
             <strong>État :</strong> ${paymentStatus}<br>
-            <strong>Montant saisi :</strong> ${paidAmount.toFixed(2)} €${paymentExtra > 0 ? `<br><strong>Excédent :</strong> ${paymentExtra.toFixed(2)} €` : ''}${debtExplanation}
+            <strong>Montant saisi :</strong> ${paidAmount.toFixed(2)} €${paymentExtra > 0 ? `<br><strong>Excédent :</strong> ${paymentExtra.toFixed(2)} €` : ''}${debtExplanation}<br>
+            <strong>Explication :</strong> ${summary.explication}
         </div>
     `;
 
